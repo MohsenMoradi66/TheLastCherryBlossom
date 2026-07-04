@@ -1,6 +1,9 @@
+
 #include "AI/GridPathfinderComponent.h"
+#include "../TheLastCherryBlossom.h" 
 #include "GameFramework/Pawn.h"
 #include "Components/CapsuleComponent.h"
+
 
 void UGridPathfinderComponent::BeginPlay()
 {
@@ -509,6 +512,9 @@ bool UGridPathfinderComponent::IsLocationWalkable(const FVector& Location) const
 
 void UGridPathfinderComponent::SetupObstacleQueryParams(FCollisionObjectQueryParams& ObjectQueryParams) const
 {
-    ObjectQueryParams.AddObjectTypesToQuery(ECollisionChannels::Buildings);
-    ObjectQueryParams.AddObjectTypesToQuery(ECollisionChannels::Trees);
+    // ۱. اسکن کانال اول (موانع اختصاصی یا RTS_Obstacle)
+    ObjectQueryParams.AddObjectTypesToQuery(ECC_RTS_Obstacle); 
+    
+    // ۲. اسکن کانال دوم (ساختمان‌ها و درختان که در ادیتور ست کردی)
+    ObjectQueryParams.AddObjectTypesToQuery(ECC_GameTraceChannel2); 
 }

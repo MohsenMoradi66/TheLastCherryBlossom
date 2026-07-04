@@ -1,12 +1,13 @@
 #include "AI/UUnitSteeringComponent.h"
 #include "Characters/AUnitCharacter.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "../TheLastCherryBlossom.h" 
 #include "Components/CapsuleComponent.h"
 #include "Engine/World.h"
 
 UUnitSteeringComponent::UUnitSteeringComponent()
 {
-    PrimaryComponentTick.bCanEverTick = false; // نیازی به تیک مجزا ندارد، توسط کاراکتر مدیریت می‌شود
+    PrimaryComponentTick.bCanEverTick = false;
     CurrentDirection = FVector::ForwardVector;
 }
 
@@ -53,6 +54,39 @@ void UUnitSteeringComponent::ResetDirection()
     EvadeDirection = FVector::ZeroVector;
 }
 
+void UUnitSteeringComponent::ClearPath()
+{
+    // پاک کردن مسیر
+    bHasPath = false;
+    CurrentPath.Empty();
+    TotalPathLength = 0.f;
+    PathCache.Reset();
+    
+    // پاک کردن هدف
+    bHasTarget = false;
+    TargetSlot = FVector::ZeroVector;
+    
+    // پاک کردن وضعیت فرار
+    bEvading = false;
+    EvadeTimer = 0.f;
+    EvadeDirection = FVector::ZeroVector;
+    
+    // پاک کردن جهت
+    CurrentDirection = FVector::ZeroVector;
+    
+    // پاک کردن پارامترهای گروه
+    bHasGroupCenter = false;
+    GroupCenter = FVector::ZeroVector;
+    GroupForward = FVector::ForwardVector;
+    
+    // ریست آفست
+    DesiredLateralOffset = 0.f;
+    
+    // ریست پرچم‌های فریم اول
+    bIsFirstFrameOfNewPath = false;
+    TimeSinceLastMoveCommand = 0.f;
+}
+
 void UUnitSteeringComponent::SetGroupParams(const FVector& InCenter, const FVector& InForward)
 {
     GroupCenter = InCenter;
@@ -65,21 +99,225 @@ void UUnitSteeringComponent::ClearGroupParams()
     bHasGroupCenter = false;
 }
 
-FVector UUnitSteeringComponent::GetGroupCompressionForce() const
+// ================== کش مسیر ==================
+
+void UUnitSteeringComponent::UpdatePathCache()
 {
-    if (!bHasGroupCenter || !Owner) return FVector::ZeroVector;
-    FVector MyPos = Owner->GetActorLocation();
-    FVector RightDir = FVector::CrossProduct(GroupForward, FVector::UpVector).GetSafeNormal();
-    FVector ToCenter = GroupCenter - MyPos;
-    float LateralDist = FVector::DotProduct(ToCenter, RightDir);
-    float AbsLateral = FMath::Abs(LateralDist);
-    if (AbsLateral <= CompressionRadius)
-        return FVector::ZeroVector;
-    float Excess = AbsLateral - CompressionRadius;
-    float Strength = FMath::Clamp(Excess / CompressionRadius, 0.f, 1.f) * CompressionStrength;
-    float DirectionSign = (LateralDist > 0.f) ? -1.f : 1.f;
-    return RightDir * DirectionSign * Strength;
+    PathCache.Reset();
+    
+    if (CurrentPath.Num() < 2) return;
+    
+    float Accumulated = 0.f;
+    for (int32 i = 0; i < CurrentPath.Num() - 1; i++)
+    {
+        float Len = FVector::Dist(CurrentPath[i], CurrentPath[i + 1]);
+        if (Len < SMALL_NUMBER) continue;
+        
+        PathCache.SegmentLengths.Add(Len);
+        PathCache.AccumulatedLengths.Add(Accumulated);
+        Accumulated += Len;
+    }
+    PathCache.TotalLength = Accumulated;
 }
+
+float UUnitSteeringComponent::GetDistanceAlongPath(const FVector& Location) const
+{
+    if (!PathCache.IsValid()) return 0.f;
+    
+    float BestDistance = 0.f;
+    float BestDistSq = FLT_MAX;
+    
+    for (int32 i = 0; i < CurrentPath.Num() - 1; i++)
+    {
+        const FVector& A = CurrentPath[i];
+        const FVector& B = CurrentPath[i + 1];
+        FVector AB = B - A;
+        float ABLenSq = AB.SizeSquared();
+        
+        if (ABLenSq < SMALL_NUMBER) continue;
+        
+        FVector AC = Location - A;
+        float t = FMath::Clamp(FVector::DotProduct(AC, AB) / ABLenSq, 0.f, 1.f);
+        FVector Closest = A + AB * t;
+        float DistSq = (Location - Closest).SizeSquared();
+        
+        if (DistSq < BestDistSq)
+        {
+            BestDistSq = DistSq;
+            BestDistance = PathCache.AccumulatedLengths[i] + (t * PathCache.SegmentLengths[i]);
+        }
+    }
+    
+    return BestDistance;
+}
+
+bool UUnitSteeringComponent::GetPointOnPathFast(float DistanceFromStart, FVector& OutPoint, FVector& OutTangent) const
+{
+    if (!PathCache.IsValid()) return false;
+    
+    DistanceFromStart = FMath::Clamp(DistanceFromStart, 0.f, PathCache.TotalLength);
+    
+    // جستجوی خطی ساده (چون تعداد قطعات معمولاً کمه)
+    for (int32 i = 0; i < PathCache.SegmentLengths.Num(); i++)
+    {
+        float SegStart = PathCache.AccumulatedLengths[i];
+        float SegEnd = SegStart + PathCache.SegmentLengths[i];
+        
+        if (DistanceFromStart <= SegEnd)
+        {
+            float t = (DistanceFromStart - SegStart) / PathCache.SegmentLengths[i];
+            const FVector& A = CurrentPath[i];
+            const FVector& B = CurrentPath[i + 1];
+            
+            OutPoint = FMath::Lerp(A, B, t);
+            OutTangent = (B - A).GetSafeNormal();
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+float UUnitSteeringComponent::GetDistanceToEndFast(const FVector& Location) const
+{
+    if (!PathCache.IsValid()) return 0.f;
+    return PathCache.TotalLength - GetDistanceAlongPath(Location);
+}
+
+// ================== تنظیم مسیر ==================
+
+void UUnitSteeringComponent::SetPath(const TArray<FVector>& NewPath)
+{
+    ClearPath();
+    if (NewPath.Num() < 2) return;
+    
+    bool bWasAlreadyMoving = bHasTarget && (Owner->GetVelocity().Size2D() > 10.f);
+    FVector SavedDirection = bWasAlreadyMoving ? Owner->GetVelocity().GetSafeNormal() : FVector::ZeroVector;
+    
+    CurrentPath = NewPath;
+    UpdatePathCache();
+    TotalPathLength = PathCache.TotalLength;
+    bHasPath = true;
+    
+    float ReusedOffset = DesiredLateralOffset;
+    if (!bWasAlreadyMoving || FMath::IsNearlyZero(ReusedOffset, 1.f))
+    {
+        if (CurrentPath.Num() >= 2)
+        {
+            FVector StartPoint = CurrentPath[0];
+            FVector NextPoint = CurrentPath[1];
+            FVector Tangent = (NextPoint - StartPoint).GetSafeNormal();
+            FVector RightDir = FVector::CrossProduct(Tangent, FVector::UpVector).GetSafeNormal();
+            FVector ToUnit = Owner->GetActorLocation() - StartPoint;
+            ReusedOffset = FVector::DotProduct(ToUnit, RightDir);
+        }
+    }
+    
+    DesiredLateralOffset = ReusedOffset;
+    
+    // جایگزین کردن بخش انتهایی تابع SetPath
+    if (Owner->GetCharacterMovement() && CurrentPath.Num() >= 2)
+    {
+        FVector BaseTangent = (CurrentPath[1] - CurrentPath[0]).GetSafeNormal();
+        FVector MoveDir = bWasAlreadyMoving ? SavedDirection : BaseTangent;
+    
+        // 🌟 اصلاح شد: استفاده مستقیم از MaxWalkSpeed به جای متغیر کمکی کاراکتر
+        float ActualMaxSpeed = Owner->GetCharacterMovement()->MaxWalkSpeed;
+        Owner->GetCharacterMovement()->Velocity = MoveDir * ActualMaxSpeed;
+
+        ResetDirection();
+        bIsFirstFrameOfNewPath = true;
+        TimeSinceLastMoveCommand = 0.f;
+
+    }
+}
+
+// ================== تابع اصلی حرکت ==================
+
+void UUnitSteeringComponent::ExecuteMovement(float DeltaTime)
+{
+    if (!Owner) return;
+    if (!bHasPath || CurrentPath.Num() < 2 || !PathCache.IsValid())
+    {
+        if (bHasTarget) ClearTarget();
+        return;
+    }
+    
+    TimeSinceLastMoveCommand += DeltaTime;
+    if (bIsFirstFrameOfNewPath && TimeSinceLastMoveCommand > FIRST_FRAME_TIME)
+    {
+        bIsFirstFrameOfNewPath = false;
+    }
+    
+    float OldOffset = DesiredLateralOffset;
+    float DistanceToEnd = GetDistanceToEndFast(Owner->GetActorLocation());
+    FVector Target;
+    
+    if (bIsFirstFrameOfNewPath)
+    {
+        FVector AbsoluteTangent = (CurrentPath[1] - CurrentPath[0]).GetSafeNormal();
+        Target = Owner->GetActorLocation() + (AbsoluteTangent * LookAheadDistance);
+    }
+    else
+    {
+        float LookAhead = CalculateDynamicLookAhead(DistanceToEnd);
+        float TargetDistance = GetDistanceAlongPath(Owner->GetActorLocation()) + LookAhead;
+        TargetDistance = FMath::Min(TargetDistance, TotalPathLength);
+        
+        FVector TargetOnPath, TargetTangent;
+        if (GetPointOnPathFast(TargetDistance, TargetOnPath, TargetTangent))
+        {
+            FVector RightDir = FVector::CrossProduct(TargetTangent, FVector::UpVector).GetSafeNormal();
+            Target = TargetOnPath + RightDir * DesiredLateralOffset;
+        }
+        else
+        {
+            Target = Owner->GetActorLocation();
+        }
+    }
+    
+    SetTargetSlot(Target);
+    
+    ComputeEvadeDirection();
+    FVector CurrentTangent = (Target - Owner->GetActorLocation()).GetSafeNormal();
+    
+    if (!bEvading)
+    {
+        UpdateGroupCompression(DeltaTime, CurrentTangent);
+    }
+    
+    float NewOffset = DesiredLateralOffset;
+    float OffsetDelta = NewOffset - OldOffset;
+    
+    if (!bIsFirstFrameOfNewPath && !FMath::IsNearlyZero(OffsetDelta, LATERAL_OFFSET_EPSILON))
+    {
+        FVector RightDir = FVector::CrossProduct(CurrentTangent, FVector::UpVector).GetSafeNormal();
+        FVector NewLocation = Owner->GetActorLocation() + (RightDir * OffsetDelta);
+        Owner->SetActorLocation(NewLocation, false);
+    }
+    
+    if (DistanceToEnd <= STOP_DISTANCE)
+    {
+        ClearTarget();
+        Owner->SetUnitState(EUnitState::Idle);
+        return;
+    }
+    
+    ApplyMovement(DeltaTime);
+}
+
+// ================== توابع کمکی ==================
+
+float UUnitSteeringComponent::CalculateDynamicLookAhead(float DistanceToEnd) const
+{
+    if (DistanceToEnd >= BRAKING_DISTANCE)
+        return LookAheadDistance;
+    
+    float T = DistanceToEnd / BRAKING_DISTANCE;
+    return FMath::Lerp(MIN_LOOK_AHEAD, LookAheadDistance, T);
+}
+
+// ================== فرار از برخورد ==================
 
 void UUnitSteeringComponent::ComputeEvadeDirection()
 {
@@ -92,42 +330,62 @@ void UUnitSteeringComponent::ComputeEvadeDirection()
     FVector DesiredDir = (TargetSlot - MyPos).GetSafeNormal();
     if (DesiredDir.IsNearlyZero()) return;
 
+    // ۱. تنظیم دقیق کانال‌ها: اسکن موانع ثابت (کانال ۲)، موانع اختصاصی و فقط یونیت‌های متحرک
+    FCollisionObjectQueryParams ObjectQueryParams;
+    ObjectQueryParams.AddObjectTypesToQuery(ECC_RTS_Obstacle);     // موانع اختصاصی
+    ObjectQueryParams.AddObjectTypesToQuery(ECC_GameTraceChannel2); // 🌟 اضافه شد: ساختمان‌ها و درختان
+    ObjectQueryParams.AddObjectTypesToQuery(ECC_RTS_MovingUnit);   // 🌟 فقط یونیت‌های در حال حرکت
+
     TArray<FOverlapResult> Overlaps;
     FCollisionQueryParams Params;
     Params.AddIgnoredActor(Owner);
     FCollisionShape SphereShape = FCollisionShape::MakeSphere(AvoidanceRadius);
-    World->OverlapMultiByChannel(Overlaps, MyPos, FQuat::Identity, ECC_Pawn, SphereShape, Params);
-
+    
+    World->OverlapMultiByObjectType(Overlaps, MyPos, FQuat::Identity, ObjectQueryParams, SphereShape, Params);
     FVector SumAvoidDir = FVector::ZeroVector;
     int32 Count = 0;
 
     for (const auto& Overlap : Overlaps)
     {
-        AUnitCharacter* Other = Cast<AUnitCharacter>(Overlap.GetActor());
-        if (!Other || Other == Owner) continue;
+        AActor* OtherActor = Overlap.GetActor();
+        if (!OtherActor || OtherActor == Owner) continue;
         
-        EUnitState OtherState = Other->GetUnitState();
-        if (OtherState == EUnitState::Dead || OtherState == EUnitState::Idle)
-            continue;
+        // ۲. فیلتر کردن سخت‌گیرانه‌ی کاراکترها
+        AUnitCharacter* OtherUnit = Cast<AUnitCharacter>(OtherActor);
+        if (OtherUnit)
+        {
+            // 🌟 یونیت‌های مرده، شوکه شده یا ایستاده (Idle) باید کاملاً نادیده گرفته شوند
+            if (OtherUnit->GetUnitState() == EUnitState::Dead || 
+                OtherUnit->GetUnitState() == EUnitState::Stunned || 
+                OtherUnit->GetUnitState() == EUnitState::Idle)
+            {
+                continue;
+            }
+        }
 
-        FVector ToOther = Other->GetActorLocation() - MyPos;
+        FVector ToOther = OtherActor->GetActorLocation() - MyPos;
         float Dist = ToOther.Size();
         if (Dist < 0.1f) continue;
         
         FVector DirToOther = ToOther / Dist;
         float Dot = FVector::DotProduct(DesiredDir, DirToOther);
         float AngleDeg = FMath::RadiansToDegrees(FMath::Acos(Dot));
+        
+        // فقط به موانعی که در زاویه دید جلوی کاراکتر هستند واکنش نشان بده
         if (AngleDeg > AvoidanceAngle * 0.5f) continue;
 
-        // هرچقدر نزدیک‌تر، نیروی فرار شدیدتر
+        // محاسبه شدت فرار بر اساس فاصله (هر چه نزدیک‌تر، فرمان فرار شدیدتر)
         float Intensity = FMath::Clamp(1.0f - (Dist / AvoidanceRadius), 0.3f, 1.0f);
         FVector RightDir = FVector::CrossProduct(DesiredDir, FVector::UpVector).GetSafeNormal();
         float Side = FMath::Sign(FVector::DotProduct(RightDir, DirToOther));
+        
+        // محاسبه بردار فرار به سمت چپ یا راست مانع
         FVector EvadeDir = (Side > 0) ? -RightDir : RightDir;
         SumAvoidDir += EvadeDir * Intensity;
         Count++;
     }
 
+    // ۳. اعمال بردار فرار نهایی
     if (Count > 0)
     {
         EvadeDirection = SumAvoidDir.GetSafeNormal();
@@ -136,10 +394,9 @@ void UUnitSteeringComponent::ComputeEvadeDirection()
     }
     else
     {
-        // در صورت عدم وجود مانع، به مرور تایمر فرار کم می‌شود تا جهش ناگهانی رخ ندهد
         if (EvadeTimer > 0.f)
         {
-            EvadeTimer -= GetWorld()->GetDeltaSeconds();
+            EvadeTimer -= World->GetDeltaSeconds();
         }
         else
         {
@@ -149,11 +406,7 @@ void UUnitSteeringComponent::ComputeEvadeDirection()
     }
 }
 
-void UUnitSteeringComponent::SetTargetSlot(const FVector& InSlotLocation)
-{
-    TargetSlot = InSlotLocation;
-    bHasTarget = true;
-}
+// ================== فشرده‌سازی گروهی ==================
 
 void UUnitSteeringComponent::UpdateGroupCompression(float DeltaTime, const FVector& CurrentTangent)
 {
@@ -165,54 +418,6 @@ void UUnitSteeringComponent::UpdateGroupCompression(float DeltaTime, const FVect
         return;
     }
 
-    UWorld* World = GetWorld();
-    if (World)
-    {
-        FVector MyPos = Owner->GetActorLocation();
-        FVector RightDir = FVector::CrossProduct(CurrentTangent, FVector::UpVector).GetSafeNormal();
-        float ToCenterSign = (DesiredLateralOffset > 0.f) ? -1.f : 1.f;
-        FVector DirectionToCenter = RightDir * ToCenterSign;
-
-        float MyCapsuleRadius = 35.f;
-        if (Owner->GetCapsuleComponent())
-        {
-            MyCapsuleRadius = Owner->GetCapsuleComponent()->GetScaledCapsuleRadius();
-        }
-
-        float CheckDistance = MyCapsuleRadius + 2.0f; 
-        FVector SensorPoint = MyPos + (DirectionToCenter * CheckDistance);
-
-        TArray<FOverlapResult> CenterOverlaps;
-        FCollisionQueryParams SeparationParams;
-        SeparationParams.AddIgnoredActor(Owner);
-        
-        float ScanSphereRadius = MyCapsuleRadius * 0.55f;
-        FCollisionShape CenterScanSphere = FCollisionShape::MakeSphere(ScanSphereRadius);
-        
-        bool bIsCenterBlocked = false;
-        if (World->OverlapMultiByChannel(CenterOverlaps, SensorPoint, FQuat::Identity, ECC_Pawn, CenterScanSphere, SeparationParams))
-        {
-            for (const auto& Overlap : CenterOverlaps)
-            {
-                AUnitCharacter* OtherUnit = Cast<AUnitCharacter>(Overlap.GetActor());
-                if (OtherUnit && OtherUnit != Owner)
-                {
-                    if (OtherUnit->GetUnitState() == EUnitState::Moving_Cluster)
-                    {
-                        bIsCenterBlocked = true;
-                        break; 
-                    }
-                }
-            }
-        }
-
-        if (bIsCenterBlocked) 
-        {
-            return; 
-        }
-    }
-
-    const float LinearCompressionSpeed = 40.f; 
     float DirectionSign = (DesiredLateralOffset > 0.f) ? -1.f : 1.f;
     float OffsetChange = DirectionSign * LinearCompressionSpeed * DeltaTime;
 
@@ -226,60 +431,87 @@ void UUnitSteeringComponent::UpdateGroupCompression(float DeltaTime, const FVect
     }
 }
 
-FVector UUnitSteeringComponent::ApplyEvadeSubsystem(const FVector& DynamicTargetSlot, const FVector& CurrentTangent)
-{
-    // این تابع به دلیل انتقال کل منطق فرار به صورت زنده به کامپوننت استیرینگ، اکنون صرفاً بک‌آپ است.
-    return DynamicTargetSlot;
-}
+// ================== اعمال حرکت ==================
 
-void UUnitSteeringComponent::UpdateSteering(float DeltaTime)
+void UUnitSteeringComponent::ApplyMovement(float DeltaTime)
 {
     if (!Owner || !bHasTarget) return;
     
     FVector MyPos = Owner->GetActorLocation();
     DistanceToGoal = FVector::Dist2D(MyPos, TargetSlot);
-
-    const float ActualStopDistance = 20.f; 
-    if (DistanceToGoal <= ActualStopDistance)
+    
+    // اگر به مقصد رسیدیم، سرعت دقیقاً صفر می‌شود
+    if (DistanceToGoal <= STOP_DISTANCE)
     {
-        ClearTarget();
-        Owner->SetUnitState(EUnitState::Idle);
+        bHasTarget = false;
+        if (Owner->GetCharacterMovement())
+        {
+            Owner->GetCharacterMovement()->Velocity = FVector::ZeroVector;
+        }
         return;
     }
-
-    // ================== حل قطعی باگ سرعت فشرده‌سازی ==================
-    // جهت حرکت فیزیکی را "فقط" به سمت جلو (راستای اسلات اصلی) تنظیم میکنیم
-    // این کار باعث می‌شود حرکت رو به جلوی کاراکتر ۱۰۰٪ ثابت و بدون افت سرعت بماند
+    
     FVector MoveDir = (TargetSlot - MyPos).GetSafeNormal();
-
-    // سیستم فرار متحرک (چون اضطراری است کمی زاویه را تغییر می‌دهد)
+    
+    // ترکیب جهت فرار با جهت اصلی حرکت
     if (bEvading && !EvadeDirection.IsNearlyZero())
     {
-        MoveDir = (MoveDir * 0.7f + EvadeDirection * 0.3f).GetSafeNormal();
+        MoveDir = (MoveDir * 0.7f + EvadeDirection * 0.3f);
     }
-
-    // حذف نوسانات ریز بصری
-    float SmoothFactor = (DistanceToGoal < 60.f) ? 45.f : 35.f;
+    
+    // نرم‌سازی چرخش فرمان (تغییر جهت)
+    float SmoothFactor = 35.f; 
     if (CurrentDirection.IsNearlyZero())
+    {
         CurrentDirection = MoveDir;
+    }
     else
+    {
         CurrentDirection = FMath::VInterpTo(CurrentDirection, MoveDir, DeltaTime, SmoothFactor);
+    }
     
+    // 🌟 حیاتی‌ترین بخش: نرم‌سازی جهت نباید طول بردار را تغییر دهد. 
+    // با گرفتن مجدد SafeNormal مطمئن می‌شویم اندازه بردار جهت دقیقاً 1.0 است.
     CurrentDirection = CurrentDirection.GetSafeNormal();
-
-    // تزریق سرعت خالص رو به جلو بدون دخالت دادن نرخ فشرده‌سازی عرضی
-    float CharacterMaxSpeed = Owner->GetCharacterMovement()->MaxWalkSpeed;
-    Owner->GetCharacterMovement()->Velocity = CurrentDirection * CharacterMaxSpeed;
     
-    // چرخش نرم مش کاراکتر
+    if (Owner->GetCharacterMovement())
+    {
+        // 🌟 قانون دوتا ۲: سرعت یا صفر است (که بالاتر چک شد) یا ماکسیمم مطلق سرعت کاراکتر
+        float CharacterMaxSpeed = Owner->GetCharacterMovement()->MaxWalkSpeed;
+        
+        // بردار جهت (با طول دقیقاً ۱) ضرب‌در سرعت ماکسیمم -> سرعت خطی همیشه ثابت است
+        Owner->GetCharacterMovement()->Velocity = CurrentDirection * CharacterMaxSpeed;
+    }
+    
+    UpdateRotation(DeltaTime);
+}
+
+void UUnitSteeringComponent::UpdateRotation(float DeltaTime)
+{
     if (Owner->GetCharacterMovement()->Velocity.Size2D() > 20.f)
     {
         FRotator TargetRot = Owner->GetCharacterMovement()->Velocity.Rotation();
-        TargetRot.Pitch = 0.f; 
+        TargetRot.Pitch = 0.f;
         TargetRot.Roll = 0.f;
         Owner->SetActorRotation(FMath::RInterpTo(Owner->GetActorRotation(), TargetRot, DeltaTime, 22.f));
     }
 }
 
-
-
+void UUnitSteeringComponent::ForceStop()
+{
+    // توقف کامل فیزیکی
+    if (Owner && Owner->GetCharacterMovement())
+    {
+        Owner->GetCharacterMovement()->StopMovementImmediately();
+        Owner->GetCharacterMovement()->Velocity = FVector::ZeroVector;
+    }
+    
+    // پاک کردن همه چیز
+    ClearPath();
+    ClearTarget();
+    ResetDirection();
+    ClearGroupParams();
+    DesiredLateralOffset = 0.f;
+    bIsFirstFrameOfNewPath = false;
+    TimeSinceLastMoveCommand = 0.f;
+}

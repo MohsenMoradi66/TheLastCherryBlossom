@@ -19,9 +19,6 @@ public:
 	void MoveUnitsWithClustering(const TArray<AUnitCharacter*>& Units, const FVector& Goal);
 	void CancelAllMoves();
 
-	// New: start computing perpendicular data for a path, spread over frames
-	void StartFormationComputationForPath(const TArray<FVector>& Path);
-
 protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Clustering")
 	float ClusterDistance = 500.f;
@@ -38,14 +35,7 @@ private:
 	void ResetFormation();
 	void ProcessNextCluster();  // جدید: پردازش یک خوشه در هر فریم
 
-	// Per‑waypoint processing (spread over frames)
-	TArray<FVector> PendingPath;
-	int32 CurrentWaypointIndex = 0;
-	FTimerHandle FormationProcessTimer;
-
-	void ProcessNextWaypoint();
-	void OnAllWaypointsProcessed();
-
+	
 	// Actually compute perpendicular line data for a single point
 	void ComputePerpendicularDataForPoint(const FVector& Point, int32 Index);
 

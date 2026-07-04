@@ -15,48 +15,6 @@
 #endif
 
 
-// ================ تابع کمکی برای رسم خطوط عمود و اسلات‌ها ================
-#if !UE_BUILD_SHIPPING
-void DrawPerpendicularLinesAndSlots(const UWorld* World, const TArray<FVector>& Path, float LineLength, int32 NumSlots, float SlotSpacing, float Duration)
-{
-    if (!World || Path.Num() < 2) return;
-
-    for (int32 i = 1; i < Path.Num(); i++)
-    {
-        const FVector& Point = Path[i];
-        FVector Tangent;
-
-        if (i == 0)
-            Tangent = (Path[1] - Path[0]).GetSafeNormal();
-        else if (i == Path.Num() - 1)
-            Tangent = (Path[i] - Path[i-1]).GetSafeNormal();
-        else
-        {
-            FVector DirPrev = (Path[i] - Path[i-1]).GetSafeNormal();
-            FVector DirNext = (Path[i+1] - Path[i]).GetSafeNormal();
-            Tangent = (DirPrev + DirNext).GetSafeNormal();
-        }
-
-        FVector RightDir = FVector::CrossProduct(Tangent, FVector::UpVector).GetSafeNormal();
-        FVector LeftDir = -RightDir;
-
-        FVector Start = Point + RightDir * LineLength;
-        FVector End = Point + LeftDir * LineLength;
-        DrawDebugLine(World, Start, End, FColor::Green, false, Duration, 0, 3.f);
-
-        for (int32 s = -NumSlots/2; s <= NumSlots/2; s++)
-        {
-            float Offset = s * SlotSpacing;
-            if (FMath::Abs(Offset) > LineLength) continue;
-            FVector SlotPoint = Point + RightDir * Offset;
-            DrawDebugSphere(World, SlotPoint, 20.f, 8, FColor::Yellow, false, Duration, 0, 2.f);
-        }
-
-        DrawDebugSphere(World, Point, 25.f, 10, FColor::Red, false, Duration, 0, 2.f);
-    }
-}
-#endif
-
 UUnitFormationManager::UUnitFormationManager()
 {
     PrimaryComponentTick.bCanEverTick = false;
@@ -94,117 +52,6 @@ void UUnitFormationManager::CancelAllMoves()
 void UUnitFormationManager::ResetFormation()
 {
     // دیگر هیچ فلو فیلدی وجود ندارد
-}
-
-void UUnitFormationManager::StartFormationComputationForPath(const TArray<FVector>& Path)
-{
-    if (!GetWorld())
-    {
-        UE_LOG(LogTemp, Warning, TEXT("StartFormationComputationForPath: No valid world"));
-        return;
-    }
-    PendingPath = Path;
-    CurrentWaypointIndex = 0;
-
-    // Clear any existing timer
-    GetWorld()->GetTimerManager().ClearTimer(FormationProcessTimer);
-
-    // Start timer: call ProcessNextWaypoint every ~0.033 sec (one frame at 30 fps)
-    GetWorld()->GetTimerManager().SetTimer(
-        FormationProcessTimer,
-        this,
-        &UUnitFormationManager::ProcessNextWaypoint,
-        0.033f,
-        true   // loop
-    );
-}
-
-void UUnitFormationManager::ProcessNextWaypoint()
-{
-    if (CurrentWaypointIndex >= PendingPath.Num())
-    {
-        // All waypoints processed
-        GetWorld()->GetTimerManager().ClearTimer(FormationProcessTimer);
-        OnAllWaypointsProcessed();
-        return;
-    }
-
-    const FVector& Point = PendingPath[CurrentWaypointIndex];
-    ComputePerpendicularDataForPoint(Point, CurrentWaypointIndex);
-
-    CurrentWaypointIndex++;
-}
-
-void UUnitFormationManager::OnAllWaypointsProcessed()
-{
-    UE_LOG(LogTemp, Log, TEXT("All waypoints processed for formation path"));
-    // Here you could trigger a delegate or set a flag that data is ready.
-}
-
-void UUnitFormationManager::ComputePerpendicularDataForPoint(const FVector& Point, int32 Index)
-{
-    // ** This is where you compute the tangent, right vector, slots, etc. **
-    // For now, a placeholder that just draws debug (if enabled) for this single point.
-    // In your real implementation, you would store the computed data in a cache.
-
-#if !UE_BUILD_SHIPPING
-    if (bDrawDebug && GetWorld() && PendingPath.Num() >= 2)
-    {
-        // Compute tangent at this point using neighbours (simplified)
-        FVector Tangent;
-        int32 Last = PendingPath.Num() - 1;
-        if (Index == 0)
-            Tangent = (PendingPath[1] - PendingPath[0]).GetSafeNormal();
-        else if (Index == Last)
-            Tangent = (PendingPath[Last] - PendingPath[Last-1]).GetSafeNormal();
-        else
-        {
-            FVector DirPrev = (PendingPath[Index] - PendingPath[Index-1]).GetSafeNormal();
-            FVector DirNext = (PendingPath[Index+1] - PendingPath[Index]).GetSafeNormal();
-            Tangent = (DirPrev + DirNext).GetSafeNormal();
-        }
-
-        FVector RightDir = FVector::CrossProduct(Tangent, FVector::UpVector).GetSafeNormal();
-        float LineLength = 500.f;
-        FVector Start = Point + RightDir * LineLength;
-        FVector End   = Point - RightDir * LineLength;
-
-        // Draw only this perpendicular line for this one point (visible for a short time)
-        DrawDebugLine(GetWorld(), Start, End, FColor::Green, false, 0.5f, 0, 2.f);
-        DrawDebugSphere(GetWorld(), Point, 20.f, 8, FColor::Red, false, 0.5f, 0, 2.f);
-    }
-#endif
-}
-
-void UUnitFormationManager::AssignPathToCluster(const TArray<AUnitCharacter*>& Cluster, const TArray<FVector>& Path, const FVector& Goal)
-{
-	if (Cluster.Num() == 0) return;
-    
-	FVector PathDir = (Path.Last() - Path[0]).GetSafeNormal();
-	FVector ClusterCenter = (Cluster.Num() == 1) ? Cluster[0]->GetActorLocation() : CalculateClusterCenter(Cluster);
-
-#if !UE_BUILD_SHIPPING
-	if (bDrawDebug && GetWorld())
-	{
-		for (int32 i = 0; i < Path.Num() - 1; i++)
-		{
-			DrawDebugLine(GetWorld(), Path[i], Path[i+1], FColor::Blue, false, 5.f, 0, 2.f);
-		}
-		StartFormationComputationForPath(Path);
-	}
-#endif
-
-	for (AUnitCharacter* Unit : Cluster)
-	{
-		if (!Unit) continue;
-		ClearUnitMoveState(Unit);
-		Unit->SetPathAndMove(Path);
-		if (Unit->SteeringComp)
-		{
-			Unit->SetSteeringGroupParams(ClusterCenter, PathDir);
-			// خط تداخل‌زا (ClearTarget) از اینجا کاملاً حذف شد!
-		}
-	}
 }
 
 void UUnitFormationManager::AssignSimpleClusterPath(const TArray<AUnitCharacter*>& Cluster, const FVector& Goal)
@@ -247,8 +94,14 @@ void UUnitFormationManager::MoveUnitsWithClustering(const TArray<AUnitCharacter*
 {
 	if (Units.Num() == 0) return;
     
-	// ۱. پاک کردن صف قبلی برای جلوگیری از انباشته شدن دستورات قدیمی
+	// 1. حتماً تایمر قبلی را در همان ابتدا پاک کنید تا پردازش‌های معلق قبلی لغو شوند
+	if (GetWorld())
+	{
+		GetWorld()->GetTimerManager().ClearTimer(ClusterProcessTimer);
+	}
+
 	PendingClusters.Empty();
+	bIsProcessingCluster = false; // ریست کردن پرچم وضعیت پردازش
 
 	TArray<TArray<AUnitCharacter*>> Clusters = UUnitClusterLibrary::ClusterUnits(Units, ClusterDistance);
 
@@ -262,84 +115,175 @@ void UUnitFormationManager::MoveUnitsWithClustering(const TArray<AUnitCharacter*
 		PendingClusters.Enqueue(Request);
 	}
 
-	// ۲. اصلاح کلیدی: به جای اجرای مستقیم و درجا، پردازش را "حتماً" با یک تاخیر ناچیز به فریم بعدی واگذار میکنیم
-	// این کار باعث می‌شود اسپم کلیک نتواند چرخه استیرینگ کاراکتر را در یک فریم چندبار Overwrite کند.
-	if (GetWorld())
+	if (GetWorld() && !PendingClusters.IsEmpty())
 	{
-		GetWorld()->GetTimerManager().ClearTimer(ClusterProcessTimer);
-        
-		// جادوی اصلی: اجرای غیرهمزمان واقعی با دیلی یک فریم (0.01 ثانیه یا حتی 0.0f ثانیه در فریم بعد)
 		GetWorld()->GetTimerManager().SetTimer(
-			ClusterProcessTimer,
-			this,
-			&UUnitFormationManager::ProcessClusterAsync,
-			0.01f, 
-			false
+		   ClusterProcessTimer,
+		   this,
+		   &UUnitFormationManager::ProcessClusterAsync,
+		   0.01f, 
+		   false
 		);
 	}
 }
 
 void UUnitFormationManager::ProcessClusterAsync()
 {
-	if (!GetWorld()) return;
+    if (!GetWorld()) 
+    {
+        bIsProcessingCluster = false;
+        return;
+    }
     
-	if (PendingClusters.IsEmpty())
-	{
-		bIsProcessingCluster = false;
-		return;
-	}
+    if (PendingClusters.IsEmpty())
+    {
+        bIsProcessingCluster = false;
+        return;
+    }
 
-	bIsProcessingCluster = true;
+    bIsProcessingCluster = true;
     
-	FClusterRequest Request;
-	PendingClusters.Dequeue(Request);
+    FClusterRequest Request;
+    PendingClusters.Dequeue(Request);
     
-	// بررسی معتبر بودن کاراکترها
-	if (Request.Units.Num() == 0 || !IsValid(Request.Units[0]))
-	{
-		bIsProcessingCluster = false;
-		ProcessClusterAsync();
-		return;
-	}
-
-	// محاسبه مرکز خوشه
-	FVector ClusterCenter = (Request.Units.Num() == 1) ? 
-	   Request.Units[0]->GetActorLocation() : 
-	   CalculateClusterCenter(Request.Units);
-
-	// گرفتن Pathfinder
-	UGridPathfinderComponent* Pathfinder = Request.Units[0]->GridPathfinder;
-	if (!Pathfinder)
-	{
-		bIsProcessingCluster = false;
-		ProcessClusterAsync();
-		return;
-	}
-
-	// محاسبه مسیر مشترک
-	TArray<FVector> Path = Pathfinder->FindPathShared(ClusterCenter, Request.Goal);
+    // ۱. فیلتر کردن یونیت‌های نامعتبر به جای سقط کامل کل خوشه
+    TArray<AUnitCharacter*> ValidUnits;
+    for (AUnitCharacter* Unit : Request.Units)
+    {
+        if (Unit && IsValid(Unit) && Unit->GetUnitState() != EUnitState::Dead)
+        {
+            ValidUnits.Add(Unit);
+        }
+    }
     
-	if (Path.Num() >= 2)
-	{
-		AssignPathToCluster(Request.Units, Path, Request.Goal);
-	}
+    // اگر هیچ یونیت سالمی در این خوشه نمانده، برو سراغ خوشه بعدی
+    if (ValidUnits.Num() == 0)
+    {
+        if (!PendingClusters.IsEmpty())
+        {
+            GetWorld()->GetTimerManager().SetTimer(ClusterProcessTimer, this, &UUnitFormationManager::ProcessClusterAsync, 0.01f, false);
+        }
+        else
+        {
+            bIsProcessingCluster = false;
+        }
+        return;
+    }
 
-	// اگر هنوز خوشه‌ای در صف باقی مانده، فریم بعدی پردازشش میکنیم
-	if (!PendingClusters.IsEmpty())
+    // ۲. محاسبه مرکز خوشه بر اساس یونیت‌های واقعاً معتبر
+    FVector ClusterCenter = (ValidUnits.Num() == 1) ? 
+        ValidUnits[0]->GetActorLocation() : 
+        CalculateClusterCenter(ValidUnits);
+
+    UGridPathfinderComponent* Pathfinder = ValidUnits[0]->GridPathfinder;
+    if (!Pathfinder)
+    {
+        // اگر پث‌فایندر نبود، بدون قفل کردن سیستم برو بعدی
+        if (!PendingClusters.IsEmpty())
+        {
+            GetWorld()->GetTimerManager().SetTimer(ClusterProcessTimer, this, &UUnitFormationManager::ProcessClusterAsync, 0.01f, false);
+        }
+        else
+        {
+            bIsProcessingCluster = false;
+        }
+        return;
+    }
+
+    // ۳. تلاش برای محاسبه مسیر مشترک
+    TArray<FVector> Path = Pathfinder->FindPathShared(ClusterCenter, Request.Goal);
+    
+    if (Path.Num() >= 2)
+    {
+        // مسیر با موفقیت ساخته شد
+        AssignPathToCluster(ValidUnits, Path, Request.Goal);
+    }
+    else
+    {
+        // 🌟 واکنش به شکست پث‌فایندر (حل مشکل اصلی شما):
+        // اگر مرکز خوشه روی دیوار بود و مسیر مشترک ساخته نشد، یونیت‌های جا مانده را رها نکن!
+        // به آن‌ها یک مسیر اضطراری مستقیم یا انفرادی از موقعیت خودشان بده تا حداقل از دیوار کنده شوند.
+        for (AUnitCharacter* Unit : ValidUnits)
+        {
+            if (!Unit) continue;
+            
+            // تلاش برای ساخت مسیر انفرادی برای یونیت جا مانده از موقعیت دقیق خودش (نه مرکز خوشه)
+            TArray<FVector> IndividualPath = Pathfinder->FindPathShared(Unit->GetActorLocation(), Request.Goal);
+            
+            if (IndividualPath.Num() >= 2)
+            {
+                ClearUnitMoveState(Unit);
+                Unit->SetPathAndMove(IndividualPath);
+                if (Unit->SteeringComp)
+                {
+                    Unit->SetSteeringGroupParams(Unit->GetActorLocation(), (IndividualPath.Last() - IndividualPath[0]).GetSafeNormal());
+                }
+            }
+            else
+            {
+                // اگر پث‌فایندر گرید کلاً این یونیت را محبوس دانسته، یک مسیر مستقیم خطی به او بده تا فیزیک او را نجات دهد
+                TArray<FVector> FallbackPath;
+                FallbackPath.Add(Unit->GetActorLocation());
+                FallbackPath.Add(Request.Goal);
+                
+                ClearUnitMoveState(Unit);
+                Unit->SetPathAndMove(FallbackPath);
+            }
+        }
+    }
+
+    // ۴. مدیریت زنجیره تایمر برای خوشه‌های بعدی بدون قطع کردن پرچم پردازش
+    if (!PendingClusters.IsEmpty())
+    {
+        GetWorld()->GetTimerManager().SetTimer(
+            ClusterProcessTimer,
+            this,
+            &UUnitFormationManager::ProcessClusterAsync,
+            0.02f, // کاهش دیلی از 0.033 به 0.02 برای پاسخ‌دهی سریع‌تر در اسپم کلیک
+            false
+        );
+    }
+    else
+    {
+        bIsProcessingCluster = false;
+    }
+}
+
+void UUnitFormationManager::AssignPathToCluster(const TArray<AUnitCharacter*>& Cluster, const TArray<FVector>& Path, const FVector& Goal)
+{
+	if (Cluster.Num() == 0) return;
+    
+	FVector PathDir = (Path.Last() - Path[0]).GetSafeNormal();
+	FVector ClusterCenter = (Cluster.Num() == 1) ? Cluster[0]->GetActorLocation() : CalculateClusterCenter(Cluster);
+
+#if !UE_BUILD_SHIPPING
+	if (bDrawDebug && GetWorld())
 	{
-		GetWorld()->GetTimerManager().SetTimer(
-		   ClusterProcessTimer,
-		   this,
-		   &UUnitFormationManager::ProcessClusterAsync,
-		   0.033f,
-		   false
-		);
+		for (int32 i = 0; i < Path.Num() - 1; i++)
+		{
+			DrawDebugLine(GetWorld(), Path[i], Path[i+1], FColor::Blue, false, 5.f, 0, 2.f);
+		}
 	}
-	else
+#endif
+
+	for (AUnitCharacter* Unit : Cluster)
 	{
-		bIsProcessingCluster = false;
+		if (!Unit || !IsValid(Unit)) continue;
+        
+		// ✅ مهم: اول حرکت قبلی رو کامل پاک کن
+		ClearUnitMoveState(Unit);
+        
+		// ✅ مسیر جدید رو تنظیم کن
+		Unit->SetPathAndMove(Path);
+        
+		if (Unit->SteeringComp)
+		{
+			Unit->SetSteeringGroupParams(ClusterCenter, PathDir);
+		}
 	}
 }
+
+
 
 
 

@@ -2,36 +2,52 @@
 #include "Environment/NaturalObject.h"
 #include "Components/CapsuleComponent.h"
 
+
+
+// ۱. اصلاح سازنده برای حذف متغیرهای دستی و هماهنگی با هدر پروژه
 ANaturalObject::ANaturalObject()
 {
 	PrimaryActorTick.bCanEverTick = false;
-	
-	// ============================================
-	// ✅ اول RootComponent را بساز
-	// ============================================
+    
 	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
-	
-	// ============================================
-	// ✅ کپسول برخورد
-	// ============================================
+    
 	CollisionCapsule = CreateDefaultSubobject<UCapsuleComponent>(TEXT("CollisionCapsule"));
 	CollisionCapsule->SetupAttachment(RootComponent);
-	CollisionCapsule->SetCapsuleRadius(DefaultCapsuleRadius);
-	CollisionCapsule->SetCapsuleHalfHeight(DefaultCapsuleHalfHeight);
+    
+	// استفاده از ماکروی هدر اصلی پروژه (ساختمان‌ها و درختان باید در یک کانال یا کانال‌های اسکن‌شده باشند)
+	// تغییر از کانال ۳ به کانال ۲ پروژه
+	CollisionChannel = ECC_GameTraceChannel2; 
+
 	CollisionCapsule->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 	CollisionCapsule->SetCollisionResponseToAllChannels(ECR_Block);
 	CollisionCapsule->SetCollisionObjectType(CollisionChannel);
-	
-	// ============================================
-	// ✅ مش بصری - به Root متصل کن
-	// ============================================
+    
 	MeshComp = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Mesh"));
 	MeshComp->SetupAttachment(RootComponent);
 	MeshComp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	
-	// مقادیر پیش‌فرض
+    
 	RemainingResources = 100;
 	HarvestPerHit = 10;
+}
+
+// ۲. اصلاح تابع SetupCollision برای جلوگیری از ریست شدن ابعاد کپسول
+void ANaturalObject::SetupCollision()
+{
+	if (CollisionCapsule)
+	{
+		// اجازه بده ابعاد توسط واریانت یا ادیتور مشخص شوند و اینجا فقط لایه شیء را محکم‌کاری کن
+		CollisionCapsule->SetCollisionObjectType(CollisionChannel);
+		CollisionCapsule->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+		CollisionCapsule->SetCollisionResponseToAllChannels(ECR_Block);
+	}
+}
+
+// ۳. اصلاح تابع BeginPlay برای اطمینان از اعمال فیزیک در زمان اجرای بازی
+void ANaturalObject::BeginPlay()
+{
+	Super::BeginPlay();
+	SetupCollision(); // 🌟 اضافه شد: محکم کاری فیزیک در فریم اول بازی
+	ApplyVariant();
 }
 
 void ANaturalObject::OnConstruction(const FTransform& Transform)
@@ -39,22 +55,6 @@ void ANaturalObject::OnConstruction(const FTransform& Transform)
 	Super::OnConstruction(Transform);
 	SetupCollision();
 	ApplyVariant();
-}
-
-void ANaturalObject::BeginPlay()
-{
-	Super::BeginPlay();
-	ApplyVariant();
-}
-
-void ANaturalObject::SetupCollision()
-{
-	if (CollisionCapsule)
-	{
-		CollisionCapsule->SetCapsuleRadius(DefaultCapsuleRadius);
-		CollisionCapsule->SetCapsuleHalfHeight(DefaultCapsuleHalfHeight);
-		CollisionCapsule->SetCollisionObjectType(CollisionChannel);
-	}
 }
 
 void ANaturalObject::ApplyVariant()

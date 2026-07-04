@@ -7,12 +7,6 @@
 #include "GridPathfinderComponent.generated.h"
 
 // ========== تعریف کانال‌های Collision ==========
-namespace ECollisionChannels
-{
-    constexpr ECollisionChannel Character = ECC_GameTraceChannel1;  // کاراکترها - نادیده گرفته می‌شوند
-    constexpr ECollisionChannel Buildings = ECC_GameTraceChannel2;  // ساختمان‌ها - مانع
-    constexpr ECollisionChannel Trees = ECC_GameTraceChannel3;      // درختان و سنگ‌ها - مانع
-}
 
 // ========== تعریف FPathRequest ==========
 USTRUCT()

@@ -10,7 +10,7 @@
 UENUM(BlueprintType)
 enum class EUnitState : uint8
 {
-    Idle, Moving, Attacking, Dead, Stunned
+    Idle, Moving, Attacking, Dead, Stunned,Stuck
 };
 
 UCLASS()
@@ -48,19 +48,34 @@ public:
     
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Selection") UStaticMeshComponent* SelectionCircleMesh;
 
-    UPROPERTY(EditAnywhere, Category = "Movement") float MaxSpeed = 450.f;
-    UPROPERTY(EditAnywhere, Category = "Movement") float RotationSpeed = 900.f;
+    UPROPERTY(EditAnywhere, Category = "Movement") float MaxSpeed = 350.f;
+    
 
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Movement")
+    class UUnitMovementComponent* UnitMovement;
+
+    float CurrentSpeed = 0.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Rotation")
+    float RotationInterpSpeed = 12.f; // سرعت چرخش (پیش‌فرض)
+    virtual FVector GetVelocity() const override;
 protected:
     virtual void BeginPlay() override;
     void OnSelectedChanged(bool bNowSelected);
     
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "State") EUnitState CurrentState = EUnitState::Idle;
 
+
 private:
     UPROPERTY(EditDefaultsOnly, Category = "Animation") TArray<UAnimMontage*> HitMontages;
 
     bool bIsSelected = false;
-    float CurrentSpeed = 0.f;
+
+    void SetIdleCollision();
+    void SetMovingCollision();
+    void SetStuckCollision();
+    void SetDeadCollision();
+    void SetAttackingCollision();
+    void OnStateChanged(EUnitState OldState, EUnitState NewState);
+    
     
 };

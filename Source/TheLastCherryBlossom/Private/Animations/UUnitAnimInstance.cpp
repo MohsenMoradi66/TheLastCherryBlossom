@@ -10,7 +10,7 @@ void UUnitAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
     if (!UnitChar) return;
 
     Anim_Speed = UnitChar->GetSpeed();  // اینجا مقداردهی با نام صحیح
-
+    UE_LOG(LogTemp, Warning, TEXT("AnimSpeed = %f"), Anim_Speed);
     // اگر می‌خوای سیستم ضربه خوردن فعال باشه
     if (bIsHit)
     {

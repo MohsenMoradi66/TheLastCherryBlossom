@@ -1,63 +1,63 @@
 ﻿#include "Characters/AUnitCharacter.h"
+#include "AI/UUnitMovementComponent.h"  // ✅ اضافه شد
+#include "AI/UUnitSteeringComponent.h"
+#include "AI/GridPathfinderComponent.h"
+#include "Components/CapsuleComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Animation/AnimInstance.h"
-#include "../TheLastCherryBlossom.h" 
-#include "Components/CapsuleComponent.h"
+#include "../TheLastCherryBlossom.h"
 
 AUnitCharacter::AUnitCharacter()
 {
-
-
     PrimaryActorTick.bCanEverTick = true;
 
-    // تنظیمات جابه‌جایی و هوش مصنوعی
-    GetCharacterMovement()->bEnablePhysicsInteraction = false;
-    GetCharacterMovement()->PushForceFactor = 0.f;
-    GetCharacterMovement()->bPushForceUsingZOffset = false;
-    GetCharacterMovement()->bUseRVOAvoidance = false;
-    GetCharacterMovement()->bUseControllerDesiredRotation = false;
-    GetCharacterMovement()->bOrientRotationToMovement = false;
-    GetCharacterMovement()->SetAvoidanceEnabled(false);
+    // ============================================================
+    // 1. ایجاد کامپوننت‌های جدید
+    // ============================================================
+    UnitMovement = CreateDefaultSubobject<UUnitMovementComponent>(TEXT("UnitMovement"));
+    GridPathfinder = CreateDefaultSubobject<UGridPathfinderComponent>(TEXT("GridPathfinder"));
+    SteeringComp = CreateDefaultSubobject<UUnitSteeringComponent>(TEXT("SteeringComp"));
 
-    // 🌟 راه حل مشکل اول: کاراکترها نباید تحت هیچ شرایطی لایه ناویگیشن زمین را خراب کنند
-    GetCapsuleComponent()->SetCanEverAffectNavigation(false); 
+    // ============================================================
+    // 2. غیرفعال کردن کامل CharacterMovementComponent
+    // ============================================================
+    if (UCharacterMovementComponent* MoveComp = GetCharacterMovement())
+    {
+        MoveComp->Deactivate();
+        MoveComp->SetComponentTickEnabled(false);
+        MoveComp->Velocity = FVector::ZeroVector;
+        MoveComp->StopMovementImmediately();
+    }
 
-    // تنظیمات کپسول فیزیکی کاراکترها
+    // ============================================================
+    // 3. تنظیمات کپسول (همانند قبل)
+    // ============================================================
+    GetCapsuleComponent()->SetCanEverAffectNavigation(false);
     GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-    GetCapsuleComponent()->SetCollisionObjectType(ECC_Pawn); // این مقدار در BeginPlay به Idle تغییر می‌کند
-    
-    // 🌟 راه حل مشکل دوم: پاسخ اولیه را روی Overlap می‌گذاریم تا توابع Sweep کور نشوند
+    GetCapsuleComponent()->SetCollisionObjectType(ECC_Pawn);
     GetCapsuleComponent()->SetCollisionResponseToAllChannels(ECR_Overlap);
-    
-    // دیوارها و موانع استاتیک ادیتور حتماً باید بلاک شوند
     GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_WorldStatic, ECR_Block);
-    
-    // کانال‌های اختصاصی پروژه که در هدر تعریف کردید را بلاک می‌کنیم تا یونیت‌ها از درون ساختمان‌ها و هم‌دیگر رد نشوند
     GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_RTS_Obstacle, ECR_Block);
-    GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_GameTraceChannel2, ECR_Block); // Buildings&Trees
+    GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_GameTraceChannel2, ECR_Block);
     GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_RTS_MovingUnit, ECR_Block);
     GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_RTS_IdleUnit, ECR_Block);
-    
+
+    // ============================================================
+    // 4. تنظیمات Mesh
+    // ============================================================
     GetMesh()->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
     GetMesh()->SetCollisionObjectType(ECC_WorldDynamic);
     GetMesh()->SetCollisionResponseToAllChannels(ECR_Ignore);
     GetMesh()->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
     GetMesh()->SetGenerateOverlapEvents(false);
-    
+
+    // ============================================================
+    // 5. Selection Circle
+    // ============================================================
     SelectionCircleMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("SelectionCircle"));
     SelectionCircleMesh->SetupAttachment(GetRootComponent());
     SelectionCircleMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
     SelectionCircleMesh->SetHiddenInGame(true);
-
-    
-    // در انتهای سازنده AUnitCharacter::AUnitCharacter() این مقادیر را اصلاح کنید:
-
-    GetCharacterMovement()->BrakingFrictionFactor = 0.0f;          // اصطکاک ترمز صفر
-    GetCharacterMovement()->BrakingDecelerationWalking = 0.0f;      // شتاب منفی ترمز صفر
-    GetCharacterMovement()->bRequestedMoveUseAcceleration = false;  // عدم استفاده از شتاب برای درخواست‌های حرکتی
-
-    // 🌟 بسیار مهم: شتاب گرفتن کاراکتر را بی‌نهایت یا بسیار بزرگ کنید تا فوراً به ماکسیمم سرعت برسد
-    GetCharacterMovement()->MaxAcceleration = 999999.f;
 
     static ConstructorHelpers::FObjectFinder<UStaticMesh> PlaneMesh(TEXT("/Engine/BasicShapes/Plane"));
     if (PlaneMesh.Succeeded())
@@ -68,32 +68,42 @@ AUnitCharacter::AUnitCharacter()
     const float ZOffset = -GetCapsuleComponent()->GetScaledCapsuleHalfHeight() - 5.f;
     SelectionCircleMesh->SetRelativeLocation(FVector(0.f, 0.f, ZOffset));
     SelectionCircleMesh->SetRelativeScale3D(FVector(1.2f, 1.2f, 1.0f));
-    
-    GridPathfinder = CreateDefaultSubobject<UGridPathfinderComponent>(TEXT("GridPathfinder"));
-    SteeringComp = CreateDefaultSubobject<UUnitSteeringComponent>(TEXT("SteeringComp"));
 
+    // ============================================================
+    // 6. مقداردهی اولیه متغیرها
+    // ============================================================
     bIsSelected = false;
-    MaxSpeed = 450.f;
     CurrentSpeed = 0.f;
-    RotationSpeed = 900.f;
+    FinalGoalRadius = 600.f;
 }
 
 void AUnitCharacter::BeginPlay()
 {
     Super::BeginPlay();
-    
-    // مقداردهی اولیه وضعیت به Idle برای تنظیم دقیق کانال کپسول فیزیکی
-    SetUnitState(EUnitState::Idle); 
 
-    SetMaxSpeed(MaxSpeed);
-    GetCharacterMovement()->RotationRate = FRotator(0.f, RotationSpeed, 0.f);
-    bUseControllerRotationYaw = false;
+    // ============================================================
+    // 7. مقداردهی سیستم حرکت جدید
+    // ============================================================
+    if (UnitMovement)
+    {
+        UnitMovement->Initialize(this);
+        UnitMovement->SetMaxSpeed(MaxSpeed);                      
+        UnitMovement->SetRotationInterpSpeed(RotationInterpSpeed);  
+    }
 
+    // ============================================================
+    // 8. مقداردهی Steering
+    // ============================================================
     if (SteeringComp)
+    {
         SteeringComp->Initialize(this);
-}
+    }
 
-// ================== توابع انتخاب ==================
+    // ============================================================
+    // 9. تنظیم وضعیت اولیه
+    // ============================================================
+    SetUnitState(EUnitState::Idle);
+}
 
 void AUnitCharacter::SetSelected_Implementation(bool bSelected)
 {
@@ -119,26 +129,23 @@ void AUnitCharacter::OnSelectedChanged(bool bNowSelected)
     }
 }
 
-// ================== توابع حرکت پایه ==================
-
 void AUnitCharacter::SetMaxSpeed(float NewMaxSpeed)
 {
-    MaxSpeed = NewMaxSpeed;
-    if (GetCharacterMovement())
-        GetCharacterMovement()->MaxWalkSpeed = MaxSpeed;
+    if (UnitMovement)
+    {
+        MaxSpeed = NewMaxSpeed;            
+        if (UnitMovement)
+            UnitMovement->SetMaxSpeed(NewMaxSpeed);
+    }
 }
 
 float AUnitCharacter::GetSpeed() const
 {
-    FVector Velocity = GetVelocity();
-    return FVector(Velocity.X, Velocity.Y, 0.f).Size();
-}
-
-void AUnitCharacter::SetRotationSpeed(float NewRotationSpeed)
-{
-    RotationSpeed = NewRotationSpeed;
-    if (GetCharacterMovement())
-        GetCharacterMovement()->RotationRate = FRotator(0.f, RotationSpeed, 0.f);
+    if (UnitMovement)
+    {
+        return UnitMovement->GetCurrentSpeed();
+    }
+    return 0.f;
 }
 
 void AUnitCharacter::PlayRandomHitMontage()
@@ -155,30 +162,6 @@ void AUnitCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
     Super::SetupPlayerInputComponent(PlayerInputComponent);
 }
 
-void AUnitCharacter::SetUnitState(EUnitState NewState)
-{
-    CurrentState = NewState; 
-    
-    if (!GetCapsuleComponent()) return;
-
-    if (NewState == EUnitState::Idle)
-    {
-        GetCapsuleComponent()->SetCollisionObjectType(ECC_RTS_IdleUnit);
-        // سربازهای دیگر باید با این سرباز ایستاده برخورد فیزیکی داشته باشند اما از آن فرار (Evade) نکنند
-        GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_RTS_MovingUnit, ECR_Block);
-        GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_RTS_IdleUnit, ECR_Block);
-    }
-    else if (NewState == EUnitState::Moving)
-    {
-        GetCapsuleComponent()->SetCollisionObjectType(ECC_RTS_MovingUnit);
-        // سربازهای دیگر هم برخورد فیزیکی دارند و هم سیستم Evade روی این لایه حساس است
-        GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_RTS_MovingUnit, ECR_Block);
-        GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_RTS_IdleUnit, ECR_Block);
-    }
-}
-
-// ================== تابع اصلی SetPathAndMove (فقط به Steering پاس بده) ==================
-
 void AUnitCharacter::SetPathAndMove(const TArray<FVector>& Path)
 {
     if (CurrentState == EUnitState::Dead || CurrentState == EUnitState::Stunned) return;
@@ -186,32 +169,18 @@ void AUnitCharacter::SetPathAndMove(const TArray<FVector>& Path)
     
     ClearMovementState();
     
+    // ✅ سیستم حرکت جدید - فقط Steering را فعال می‌کنیم
     if (SteeringComp)
     {
         SteeringComp->SetPath(Path);
     }
     
-    if (CurrentState != EUnitState::Moving)
-    {
-        SetUnitState(EUnitState::Moving);
-    }
-    
+    SetUnitState(EUnitState::Moving);
     FinalGoalLocation = Path.Last();
 }
 
-// ================== ClearMovementState (ریست کامل) ==================
-
 void AUnitCharacter::ClearMovementState()
 {
-    // 1. توقف کامل فیزیکی
-    if (GetCharacterMovement())
-    {
-        GetCharacterMovement()->StopMovementImmediately();
-        GetCharacterMovement()->Velocity = FVector::ZeroVector;
-        GetCharacterMovement()->ClearAccumulatedForces();
-    }
-    
-    // 2. پاک کردن کامل وضعیت استیرینگ
     if (SteeringComp)
     {
         SteeringComp->ClearPath();
@@ -221,34 +190,34 @@ void AUnitCharacter::ClearMovementState()
         SteeringComp->SetDesiredLateralOffset(0.f);
     }
     
-    // 3. تغییر وضعیت به Idle
+    if (UnitMovement)
+    {
+        UnitMovement->StopImmediately();
+    }
+    
+    // ===== فقط اگر مرده یا گیج نیست، به Idle برو =====
     if (CurrentState != EUnitState::Dead && CurrentState != EUnitState::Stunned)
-        SetUnitState(EUnitState::Idle);
+    {
+        SetUnitState(EUnitState::Idle);  // اینجا Collision به درستی تنظیم می‌شود
+    }
 }
-
-// ================== حلقه اصلی Tick (فقط اجراکننده) ==================
 
 void AUnitCharacter::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
     
-    // 🌟 اصلاح شد: به جای خواندن مستقیم از فیزیک، سرعت را بر اساس وضعیت باینری ست می‌کنیم
-    if (CurrentState == EUnitState::Moving && GetCharacterMovement() && GetCharacterMovement()->Velocity.Size2D() > 10.f)
+    // ✅ بروزرسانی سرعت جاری (برای نمایش)
+    if (UnitMovement)
     {
-        CurrentSpeed = GetCharacterMovement()->MaxWalkSpeed; // قفل روی ماکسیمم سرعت
-    }
-    else
-    {
-        CurrentSpeed = 0.f; // قفل روی صفر مطلق
+        CurrentSpeed = UnitMovement->GetCurrentSpeed();
     }
     
     if (CurrentState == EUnitState::Dead || CurrentState == EUnitState::Stunned) return;
     if (!SteeringComp) return;
     
+    // ✅ فقط Steering را اجرا کن (خودش حرکت را اعمال می‌کند)
     SteeringComp->ExecuteMovement(DeltaTime);
 }
-
-// ================== توابع گروهی (فقط واسطه) ==================
 
 void AUnitCharacter::SetSteeringGroupParams(const FVector& Center, const FVector& Forward)
 {
@@ -262,3 +231,141 @@ void AUnitCharacter::ClearSteeringGroupParams()
         SteeringComp->ClearGroupParams();
 }
 
+void AUnitCharacter::SetRotationSpeed(float NewRotationSpeed)
+{
+    RotationInterpSpeed = NewRotationSpeed;   // این خط اضافه بشه
+    if (UnitMovement)
+        UnitMovement->SetRotationInterpSpeed(NewRotationSpeed);
+}
+
+// ================== تابع SetUnitState اصلاح شده ==================
+
+// AUnitCharacter.cpp
+void AUnitCharacter::SetUnitState(EUnitState NewState)
+{
+    if (CurrentState == NewState) return;
+    
+    EUnitState OldState = CurrentState;
+    CurrentState = NewState;
+    
+    // ===== خروج از وضعیت قبلی =====
+    if (OldState == EUnitState::Stuck)
+    {
+        // رفع گیر انجام شد
+        if (SteeringComp)
+        {
+            SteeringComp->ResetUnstuckAttempts();  // ریست تلاش‌ها
+        }
+    }
+    
+    // ===== ورود به وضعیت جدید =====
+    switch (NewState)
+    {
+    case EUnitState::Idle:
+        // تنظیم Collision برای Idle
+            SetIdleCollision();
+        if (UnitMovement) UnitMovement->StopImmediately();
+        break;
+            
+    case EUnitState::Moving:
+        // تنظیم Collision برای Moving
+            SetMovingCollision();
+        break;
+            
+    case EUnitState::Stuck:
+        // تنظیم Collision برای Stuck (مثل Idle ولی با تفاوت)
+            SetStuckCollision();
+            
+        // شروع فرآیند رفع گیر
+        if (SteeringComp)
+        {
+            SteeringComp->AttemptUnstuck(GetWorld()->GetDeltaSeconds());
+        }
+        break;
+            
+    case EUnitState::Dead:
+    case EUnitState::Stunned:
+        // تنظیم Collision برای مرده/گیج
+        SetDeadCollision();
+        break;
+            
+    case EUnitState::Attacking:
+        // تنظیم Collision برای حمله
+            SetAttackingCollision();
+        break;
+    }
+    
+    // ===== اطلاع به سایر سیستم‌ها =====
+    OnStateChanged(OldState, NewState);
+}
+
+// در AUnitCharacter.cpp پیاده‌سازی کن:
+
+void AUnitCharacter::SetIdleCollision()
+{
+    UCapsuleComponent* Capsule = GetCapsuleComponent();
+    if (!Capsule) return;
+    
+    Capsule->SetCollisionObjectType(ECC_GameTraceChannel5); // RTS_IdleUnit
+    Capsule->SetCollisionResponseToChannel(ECC_GameTraceChannel4, ECR_Block);
+    Capsule->SetCollisionResponseToChannel(ECC_GameTraceChannel5, ECR_Block);
+    Capsule->SetCollisionResponseToChannel(ECC_RTS_Obstacle, ECR_Block);
+    Capsule->SetCollisionResponseToChannel(ECC_WorldStatic, ECR_Block);
+}
+
+void AUnitCharacter::SetMovingCollision()
+{
+    UCapsuleComponent* Capsule = GetCapsuleComponent();
+    if (!Capsule) return;
+    
+    Capsule->SetCollisionObjectType(ECC_GameTraceChannel4); // RTS_MovingUnit
+    Capsule->SetCollisionResponseToChannel(ECC_GameTraceChannel4, ECR_Block);
+    Capsule->SetCollisionResponseToChannel(ECC_GameTraceChannel5, ECR_Block);
+    Capsule->SetCollisionResponseToChannel(ECC_RTS_Obstacle, ECR_Block);
+    Capsule->SetCollisionResponseToChannel(ECC_WorldStatic, ECR_Block);
+}
+
+void AUnitCharacter::SetStuckCollision()
+{
+    UCapsuleComponent* Capsule = GetCapsuleComponent();
+    if (!Capsule) return;
+    
+    Capsule->SetCollisionObjectType(ECC_GameTraceChannel5);
+    Capsule->SetCollisionResponseToChannel(ECC_GameTraceChannel4, ECR_Block);
+    Capsule->SetCollisionResponseToChannel(ECC_GameTraceChannel5, ECR_Block);
+    Capsule->SetCollisionResponseToChannel(ECC_RTS_Obstacle, ECR_Block);
+    Capsule->SetCollisionResponseToChannel(ECC_WorldStatic, ECR_Block);
+}
+
+void AUnitCharacter::SetDeadCollision()
+{
+    UCapsuleComponent* Capsule = GetCapsuleComponent();
+    if (!Capsule) return;
+    
+    Capsule->SetCollisionObjectType(ECC_WorldDynamic);
+    Capsule->SetCollisionResponseToAllChannels(ECR_Ignore);
+    Capsule->SetCollisionResponseToChannel(ECC_WorldStatic, ECR_Block);
+}
+
+void AUnitCharacter::SetAttackingCollision()
+{
+    // مثل Moving یا هر چیزی که می‌خوای
+    SetMovingCollision();
+}
+
+void AUnitCharacter::OnStateChanged(EUnitState OldState, EUnitState NewState)
+{
+    // اینجا می‌تونی Event/Delegate صدا بزنی یا Log کنی
+    UE_LOG(LogTemp, Log, TEXT("Unit %s state changed from %d to %d"), 
+           *GetName(), (int32)OldState, (int32)NewState);
+}
+
+FVector AUnitCharacter::GetVelocity() const
+{
+    if (UnitMovement)
+    {
+        return UnitMovement->GetCurrentVelocity();
+    }
+
+    return FVector::ZeroVector;
+}
